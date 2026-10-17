@@ -1,0 +1,108 @@
+name: Extract Unity assets
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag that holds the APK"
+        required: true
+      apk:
+        description: "APK file name"
+        required: true
+      obb:
+        description: "OBB file name (leave empty if the game has none)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Download the APK (and OBB) from the private release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          APK: ${{ inputs.apk }}
+          OBB: ${{ inputs.obb }}
+        run: |
+          gh release download "$TAG" --repo "${{ github.repository }}" --pattern "$APK"
+          if [ -n "$OBB" ]; then
+            gh release download "$TAG" --repo "${{ github.repository }}" --pattern "$OBB"
+          fi
+
+      - name: Unpack
+        env:
+          APK: ${{ inputs.apk }}
+          OBB: ${{ inputs.obb }}
+        run: |
+          mkdir -p game
+          unzip -q -o "$APK" -d game
+          if [ -n "$OBB" ]; then
+            mkdir -p game/obb
+            unzip -q -o "$OBB" -d game/obb || cp "$OBB" game/obb/
+          fi
+          {
+            echo "## Unpacked game"
+            echo '```'
+            ls game/assets/bin/Data 2>/dev/null | head -40
+            echo '```'
+            echo "files: $(find game -type f | wc -l)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Get AssetRipper
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p ar
+          gh release download --repo AssetRipper/AssetRipper --pattern '*linux_x64*' --dir ar
+          cd ar
+          for z in *.zip; do unzip -q -o "$z"; done
+          BIN=$(find . -type f -name 'AssetRipper.GUI.Free' | head -1)
+          if [ -z "$BIN" ]; then echo "AssetRipper binary not found:"; ls -R . | head -50; exit 1; fi
+          chmod +x "$BIN"
+          echo "$BIN" > ../ar-bin.txt
+
+      - name: Export Unity project
+        run: |
+          BIN="$PWD/ar/$(cat ar-bin.txt)"
+          mkdir -p out
+          "$BIN" --port 5000 --launch-browser false > ar.log 2>&1 &
+          for i in $(seq 1 60); do
+            curl -s -o /dev/null http://localhost:5000/ && break
+            sleep 2
+          done
+          curl -s -X POST http://localhost:5000/LoadFolder --data-urlencode "path=$PWD/game" -o load.txt || true
+          sleep 20
+          curl -s -X POST http://localhost:5000/Export/UnityProject --data-urlencode "path=$PWD/out" --data-urlencode "createSubfolder=false" --max-time 3000 -o export.txt || true
+          {
+            echo "## Export"
+            echo "files exported: $(find out -type f | wc -l)"
+            echo "size: $(du -sh out | cut -f1)"
+            echo
+            echo "Top folders:"
+            echo '```'
+            find out -maxdepth 3 -type d | head -30
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Save the exported project
+        uses: actions/upload-artifact@v4
+        with:
+          name: unity-project
+          path: out
+          if-no-files-found: warn
+
+      - name: Save logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs
+          path: |
+            ar.log
+            load.txt
+            export.txt
+          if-no-files-found: ignore
