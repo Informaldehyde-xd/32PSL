@@ -60,7 +60,7 @@ jobs:
           mkdir -p ar
           echo "Release assets:"
           gh release view --repo AssetRipper/AssetRipper --json assets -q '.assets[].name'
-          gh release download --repo AssetRipper/AssetRipper --pattern '*linux*' --dir ar
+          gh release download --repo AssetRipper/AssetRipper --pattern '*linux_x64*' --dir ar
           cd ar
           echo "Downloaded:"
           ls -la
@@ -75,6 +75,7 @@ jobs:
           fi
           if [ -z "$BIN" ]; then echo "AssetRipper binary not found:"; ls -R . | head -50; exit 1; fi
           chmod +x "$BIN"
+          file "$BIN" || true
           echo "$BIN" > ../ar-bin.txt
 
       - name: Export Unity project
