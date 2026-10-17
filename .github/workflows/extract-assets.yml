@@ -66,9 +66,12 @@ jobs:
           ls -la
           find . -maxdepth 1 -name '*.zip' -exec unzip -q -o {} \;
           find . -maxdepth 1 \( -name '*.tar.gz' -o -name '*.tgz' \) -exec tar -xzf {} \;
+          find . -maxdepth 1 -name '*.tar.xz' -exec tar -xJf {} \;
+          echo "After unpacking:"
+          ls -la
           BIN=$(find . -type f -name 'AssetRipper.GUI.Free' | head -1)
           if [ -z "$BIN" ]; then
-            BIN=$(find . -type f -name 'AssetRipper*' ! -name '*.zip' ! -name '*.gz' ! -name '*.tgz' ! -name '*.json' ! -name '*.txt' | head -1)
+            BIN=$(find . -type f -name 'AssetRipper*' ! -name '*.zip' ! -name '*.gz' ! -name '*.tgz' ! -name '*.xz' ! -name '*.json' ! -name '*.txt' | head -1)
           fi
           if [ -z "$BIN" ]; then echo "AssetRipper binary not found:"; ls -R . | head -50; exit 1; fi
           chmod +x "$BIN"
@@ -96,6 +99,11 @@ jobs:
             find out -maxdepth 3 -type d | head -30
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$(find out -type f | wc -l)" -eq 0 ]; then
+            echo "Nothing was exported. AssetRipper log:"
+            tail -50 ar.log
+            exit 1
+          fi
 
       - name: Save the exported project
         uses: actions/upload-artifact@v4
