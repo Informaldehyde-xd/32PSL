@@ -58,10 +58,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p ar
-          gh release download --repo AssetRipper/AssetRipper --pattern '*linux_x64*' --dir ar
+          echo "Release assets:"
+          gh release view --repo AssetRipper/AssetRipper --json assets -q '.assets[].name'
+          gh release download --repo AssetRipper/AssetRipper --pattern '*linux*' --dir ar
           cd ar
-          for z in *.zip; do unzip -q -o "$z"; done
+          echo "Downloaded:"
+          ls -la
+          find . -maxdepth 1 -name '*.zip' -exec unzip -q -o {} \;
+          find . -maxdepth 1 \( -name '*.tar.gz' -o -name '*.tgz' \) -exec tar -xzf {} \;
           BIN=$(find . -type f -name 'AssetRipper.GUI.Free' | head -1)
+          if [ -z "$BIN" ]; then
+            BIN=$(find . -type f -name 'AssetRipper*' ! -name '*.zip' ! -name '*.gz' ! -name '*.tgz' ! -name '*.json' ! -name '*.txt' | head -1)
+          fi
           if [ -z "$BIN" ]; then echo "AssetRipper binary not found:"; ls -R . | head -50; exit 1; fi
           chmod +x "$BIN"
           echo "$BIN" > ../ar-bin.txt
