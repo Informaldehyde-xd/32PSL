@@ -1,0 +1,80 @@
+name: Survey libs
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag that holds the zip"
+        required: true
+      zip:
+        description: "Zip file name (armeabi-v7a libs)"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  survey:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Download zip from the private release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          ZIP: ${{ inputs.zip }}
+        run: gh release download "$TAG" --repo "${{ github.repository }}" --pattern "$ZIP"
+
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y binutils radare2
+
+      - name: Survey each library
+        env:
+          ZIP: ${{ inputs.zip }}
+        run: |
+          unzip -q -o "$ZIP" -d libs
+          mkdir -p out
+          for lib in $(find libs -name '*.so' | sort); do
+            name=$(basename "$lib" .so)
+            d="out/$name"
+            mkdir -p "$d"
+            readelf -A "$lib"          > "$d/arm-attributes.txt" 2>&1 || true
+            readelf -d "$lib" | grep NEEDED > "$d/needed-libs.txt" || true
+            readelf -S -W "$lib"       > "$d/sections.txt" 2>&1 || true
+            readelf --dyn-syms -W "$lib" > "$d/dynsyms.txt" 2>&1 || true
+            awk '$7 == "UND" && NF >= 8 {print $8}' "$d/dynsyms.txt" | sort -u > "$d/imports.txt"
+            awk '$7 != "UND" && $4 == "FUNC" && NF >= 8 {print $8}' "$d/dynsyms.txt" | sort -u > "$d/exports.txt"
+            objdump -d "$lib" 2>/dev/null | awk -F'\t' 'NF >= 3 {split($3, a, " "); print a[1]}' | sort | uniq -c | sort -rn > "$d/mnemonics.txt" || true
+            timeout 1500 r2 -q -c 'aa; afl~?' "$lib" > "$d/r2-function-count.txt" 2>&1 || echo "r2 timed out or failed" > "$d/r2-function-count.txt"
+          done
+
+      - name: Write summary
+        run: |
+          {
+            echo "## Survey"
+            for d in out/*; do
+              name=$(basename "$d")
+              lib=$(find libs -name "$name.so" | head -1)
+              echo
+              echo "### $name"
+              echo "- file size: $(stat -c %s "$lib") bytes"
+              echo "- imports: $(wc -l < "$d/imports.txt")   exports: $(wc -l < "$d/exports.txt")"
+              echo "- functions found by radare2: $(tail -1 "$d/r2-function-count.txt")"
+              echo "- NEON/VFP-style instructions (v* mnemonics): $(awk '$2 ~ /^v/ {s += $1} END {print s+0}' "$d/mnemonics.txt")"
+              echo "- Thumb-2 style instructions (*.w mnemonics): $(awk '$2 ~ /\.w$/ {s += $1} END {print s+0}' "$d/mnemonics.txt")"
+              echo "- needs: $(sed 's/.*Shared library: //' "$d/needed-libs.txt" | tr '\n' ' ')"
+              echo
+              echo "ARM attributes:"
+              echo '```'
+              grep -E 'Tag_(CPU_arch|THUMB_ISA_use|FP_arch|Advanced_SIMD_arch|ABI_VFP_args)' "$d/arm-attributes.txt" || echo "none"
+              echo '```'
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Save raw output
+        uses: actions/upload-artifact@v4
+        with:
+          name: survey-raw
+          path: out
