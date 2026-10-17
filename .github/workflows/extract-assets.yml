@@ -53,7 +53,7 @@ jobs:
             echo "files: $(find game -type f | wc -l)"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Get AssetRipper
+      - name: Get AssetRipper (Linux x64 only)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -62,18 +62,12 @@ jobs:
           gh release view --repo AssetRipper/AssetRipper --json assets -q '.assets[].name'
           gh release download --repo AssetRipper/AssetRipper --pattern '*linux_x64*' --dir ar
           cd ar
-          echo "Downloaded:"
           ls -la
           find . -maxdepth 1 -name '*.zip' -exec unzip -q -o {} \;
           find . -maxdepth 1 \( -name '*.tar.gz' -o -name '*.tgz' \) -exec tar -xzf {} \;
           find . -maxdepth 1 -name '*.tar.xz' -exec tar -xJf {} \;
-          echo "After unpacking:"
-          ls -la
           BIN=$(find . -type f -name 'AssetRipper.GUI.Free' | head -1)
-          if [ -z "$BIN" ]; then
-            BIN=$(find . -type f -name 'AssetRipper*' ! -name '*.zip' ! -name '*.gz' ! -name '*.tgz' ! -name '*.xz' ! -name '*.json' ! -name '*.txt' | head -1)
-          fi
-          if [ -z "$BIN" ]; then echo "AssetRipper binary not found:"; ls -R . | head -50; exit 1; fi
+          if [ -z "$BIN" ]; then echo "AssetRipper program not found:"; ls -R . | head -50; exit 1; fi
           chmod +x "$BIN"
           file "$BIN" || true
           echo "$BIN" > ../ar-bin.txt
@@ -81,28 +75,73 @@ jobs:
       - name: Export Unity project
         run: |
           BIN="$PWD/ar/$(cat ar-bin.txt)"
-          mkdir -p out
-          "$BIN" --port 5000 --launch-browser false > ar.log 2>&1 &
-          for i in $(seq 1 60); do
-            curl -s -o /dev/null http://localhost:5000/ && break
+          OUT="$PWD/out"
+          BASE=http://127.0.0.1:5000
+          mkdir -p "$OUT" diag
+
+          # Start AssetRipper without a browser (options confirmed by its own usage text)
+          "$BIN" --headless --port 5000 > ar.log 2>&1 &
+          AR_PID=$!
+          up=0
+          for i in $(seq 1 90); do
+            if curl -s -o /dev/null "$BASE/"; then up=1; break; fi
+            kill -0 "$AR_PID" 2>/dev/null || break
             sleep 2
           done
-          curl -s -X POST http://localhost:5000/LoadFolder --data-urlencode "path=$PWD/game" -o load.txt || true
-          sleep 20
-          curl -s -X POST http://localhost:5000/Export/UnityProject --data-urlencode "path=$PWD/out" --data-urlencode "createSubfolder=false" --max-time 3000 -o export.txt || true
+          if [ "$up" -ne 1 ]; then echo "AssetRipper did not start:"; cat ar.log; exit 1; fi
+          echo "AssetRipper is up"
+
+          # Save the server's own documentation pages for diagnosis
+          for p in /Commands /swagger/v1/swagger.json /openapi/v1.json /; do
+            f="diag/page$(echo "$p" | tr '/' '_').txt"
+            code=$(curl -s -o "$f" -w '%{http_code}' "$BASE$p" || true)
+            echo "GET $p -> HTTP $code"
+          done
+
+          count() { find "$OUT" -type f | wc -l; }
+          post() {
+            local ep="$1"; shift
+            local code
+            code=$(curl -s -o resp.txt -w '%{http_code}' --max-time 3300 -X POST "$BASE$ep" "$@") || code="curl-failed"
+            echo "POST $ep $* -> HTTP $code"
+            head -c 800 resp.txt || true
+            echo
+          }
+
+          # Try loading the whole unpacked APK, then just the Unity data folder
+          for LOADPATH in "$PWD/game" "$PWD/game/assets/bin/Data"; do
+            echo "=== Loading $LOADPATH"
+            post /Reset
+            post /LoadFolder --data-urlencode "Path=$LOADPATH"
+            sleep 5
+            for variant in 1 2 3; do
+              case $variant in
+                1) post /Export/UnityProject --data-urlencode "Path=$OUT" --data-urlencode "CreateSubfolder=false" ;;
+                2) post /Export/UnityProject --data-urlencode "Path=$OUT" ;;
+                3) post "/Export/UnityProject?Path=$OUT" ;;
+              esac
+              if [ "$(count)" -gt 0 ]; then break 2; fi
+            done
+          done
+
+          kill "$AR_PID" 2>/dev/null || true
+
           {
             echo "## Export"
-            echo "files exported: $(find out -type f | wc -l)"
-            echo "size: $(du -sh out | cut -f1)"
+            echo "files exported: $(count)"
+            echo "size: $(du -sh "$OUT" | cut -f1)"
             echo
             echo "Top folders:"
             echo '```'
-            find out -maxdepth 3 -type d | head -30
+            find "$OUT" -maxdepth 3 -type d | head -30
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-          if [ "$(find out -type f | wc -l)" -eq 0 ]; then
-            echo "Nothing was exported. AssetRipper log:"
-            tail -50 ar.log
+
+          if [ "$(count)" -eq 0 ]; then
+            echo "Nothing was exported. AssetRipper log (tail):"
+            tail -60 ar.log
+            echo "Server command page (head):"
+            head -c 3000 diag/page_Commands.txt || true
             exit 1
           fi
 
@@ -111,6 +150,7 @@ jobs:
         with:
           name: unity-project
           path: out
+          retention-days: 3
           if-no-files-found: warn
 
       - name: Save logs
@@ -120,6 +160,6 @@ jobs:
           name: logs
           path: |
             ar.log
-            load.txt
-            export.txt
+            resp.txt
+            diag
           if-no-files-found: ignore
