@@ -52,6 +52,7 @@ jobs:
           # Run Ghidra inside Docker
           # We mount our current directory to /data inside the container
           docker run --rm \
+            -e MAXMEM=6G \
             -v "$(pwd):/data" \
             -v "$(pwd)/ghidra_scripts:/scripts" \
             blacktop/ghidra:latest \
