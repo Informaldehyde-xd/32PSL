@@ -37,13 +37,6 @@ jobs:
           echo "Found decompiler at: $DECOMPILER_PATH"
           echo "decompiler_path=$DECOMPILER_PATH" >> "$GITHUB_OUTPUT"
 
-      - name: Decompile libJadeEmpireCore.so
-        run: |
-          # Make the script executable just in case
-          chmod +x "${{ steps.find_retdec.outputs.decompiler_path }}"
-          # Run the decompiler using the dynamically found path
-          python3 "${{ steps.find_retdec.outputs.decompiler_path }}" libs/libJadeEmpireCore.so
-
       - name: Decompile libObbVfs.so
         run: |
           python3 "${{ steps.find_retdec.outputs.decompiler_path }}" libs/libObbVfs.so
