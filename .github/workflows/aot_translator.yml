@@ -42,7 +42,7 @@ jobs:
           ulimit -v 6000000
           
           # Run the decompiler
-          python3 "${{ steps.find_retdec.outputs.decompiler_path }}" libs/libJadeEmpireCore.so
+          python3 "${{ steps.find_retdec.outputs.decompiler_path }}" --no-memory-limit libs/libJadeEmpireCore.so
 
       - name: Upload LLVM IR and C Outputs
         uses: actions/upload-artifact@v4
