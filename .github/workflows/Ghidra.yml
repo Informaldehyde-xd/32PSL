@@ -1,0 +1,71 @@
+name: Ghidra Headless (Docker)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  decompile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Create Ghidra Script to Export C Code
+        run: |
+          mkdir -p ghidra_scripts
+          cat << 'EOF' > ghidra_scripts/DecompileAll.java
+          import ghidra.app.decompiler.*;
+          import ghidra.app.script.GhidraScript;
+          import ghidra.program.model.listing.*;
+          import java.io.*;
+
+          public class DecompileAll extends GhidraScript {
+              @Override
+              public void run() throws Exception {
+                  DecompInterface decompiler = new DecompInterface();
+                  decompiler.openProgram(currentProgram);
+                  
+                  File outputFile = new File("/tmp/decompiled.c");
+                  BufferedWriter writer = new BufferedWriter(new FileWriter(outputFile));
+                  
+                  for (Function func : currentProgram.getFunctionManager().getFunctions(true)) {
+                      DecompileResults res = decompiler.decompileFunction(func, 60, monitor);
+                      if (res.decompileCompleted()) {
+                          writer.write("// Function: " + func.getName() + "\n");
+                          writer.write(res.getDecompiledFunction().getC() + "\n\n");
+                      }
+                  }
+                  writer.close();
+                  decompiler.dispose();
+              }
+          }
+          EOF
+
+      - name: Run Ghidra Docker
+        run: |
+          # Create directories for Ghidra project and output
+          mkdir -p ghidra_project
+          mkdir -p ghidra_output
+          
+          # Run Ghidra inside Docker
+          # We mount our current directory to /data inside the container
+          docker run --rm \
+            -v "$(pwd):/data" \
+            -v "$(pwd)/ghidra_scripts:/scripts" \
+            blacktop/ghidra:latest \
+            /ghidra/support/analyzeHeadless /data/ghidra_project MyProject \
+            -import /data/libs/libJadeEmpireCore.so \
+            -scriptPath /scripts \
+            -postScript DecompileAll.java \
+            -deleteProject \
+            -max-cpu 2 \
+            -jvmArgs "-Xmx6g"
+
+      - name: Upload Decompiled Code
+        uses: actions/upload-artifact@v4
+        with:
+          name: jade-empire-c-code
+          path: ghidra_output/decompiled.c
+          retention-days: 7
