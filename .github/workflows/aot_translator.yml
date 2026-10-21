@@ -1,14 +1,12 @@
 name: AOT Translate Jade Empire (RetDec)
 
 on:
-  workflow_dispatch: # Allows you to run this manually from the Actions tab
-  push:
-    branches: [ main, master ]
+  workflow_dispatch:
 
 jobs:
   translate:
     runs-on: ubuntu-latest
-    timeout-minutes: 180 # RetDec can take a long time on large binaries
+    timeout-minutes: 180
 
     steps:
       - name: Checkout Repository
@@ -22,24 +20,38 @@ jobs:
       - name: Download and Extract RetDec v4.0
         run: |
           wget https://github.com/avast/retdec/releases/download/v4.0/retdec-v4.0-ubuntu-64b.tar.xz
+          # Extract the archive. It will create a folder named 'retdec'
           tar -xf retdec-v4.0-ubuntu-64b.tar.xz
-          mv retdec-v4.0-ubuntu-64b retdec
-          echo "RetDec installed successfully."
+          echo "Extracted contents:"
+          ls -l
+
+      - name: Locate the Decompiler Binary
+        id: find_retdec
+        run: |
+          # Dynamically find the path to the executable
+          DECOMPILER_PATH=$(find . -type f -name 'retdec-decompiler.py' | head -n 1)
+          if [ -z "$DECOMPILER_PATH" ]; then
+            echo "Error: Could not find retdec-decompiler.py"
+            exit 1
+          fi
+          echo "Found decompiler at: $DECOMPILER_PATH"
+          echo "decompiler_path=$DECOMPILER_PATH" >> "$GITHUB_OUTPUT"
 
       - name: Decompile libJadeEmpireCore.so
         run: |
-          # Adjust the input path if your .so file is located elsewhere
-          ./retdec/bin/retdec-decompiler libs/libJadeEmpireCore.so
-          
+          # Make the script executable just in case
+          chmod +x "${{ steps.find_retdec.outputs.decompiler_path }}"
+          # Run the decompiler using the dynamically found path
+          python3 "${{ steps.find_retdec.outputs.decompiler_path }}" libs/libJadeEmpireCore.so
+
       - name: Decompile libObbVfs.so
         run: |
-          ./retdec/bin/retdec-decompiler libs/libObbVfs.so
+          python3 "${{ steps.find_retdec.outputs.decompiler_path }}" libs/libObbVfs.so
 
       - name: Upload LLVM IR and C Outputs
         uses: actions/upload-artifact@v4
         with:
           name: jade-empire-aot-output
-          # RetDec outputs .ll (LLVM IR), .c (Pseudo-C), and .dsm (Assembly) files
           path: |
             libs/*.ll
             libs/*.c
