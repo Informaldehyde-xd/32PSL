@@ -1,0 +1,90 @@
+name: Lift Jade Empire to LLVM IR (McSema + Ghidra)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  lift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential clang llvm lld python3 python3-pip git wget unzip openjdk-17-jdk
+          pip3 install pyelftools
+
+      - name: Download and Setup Ghidra (for CFG generation)
+        run: |
+          wget https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_11.0_build/ghidra_11.0_PUBLIC_20240130.zip
+          unzip -q ghidra_11.0_PUBLIC_20240130.zip
+          mv ghidra_11.0_PUBLIC ghidra
+
+      - name: Build McSema
+        run: |
+          git clone https://github.com/lifting-bits/mcsema.git
+          cd mcsema
+          # We only build the lifter, not the disassembler (we use Ghidra for that)
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DMCSEMA_ENABLE_DISASSEMBLER=OFF
+          cmake --build build --parallel 2
+          sudo cmake --install build
+
+      - name: Generate CFG with Ghidra
+        run: |
+          # Ghidra script to export the CFG in a format McSema can read (or we export the bounds)
+          mkdir -p /home/runner/ghidra_scripts
+          cat << 'EOF' > /home/runner/ghidra_scripts/ExportCFG.java
+          import ghidra.app.script.GhidraScript;
+          import ghidra.program.model.listing.*;
+          import java.io.*;
+          
+          public class ExportCFG extends GhidraScript {
+              @Override
+              public void run() throws Exception {
+                  File outFile = new File("/home/runner/mcsema_input.txt");
+                  BufferedWriter writer = new BufferedWriter(new FileWriter(outFile));
+                  FunctionManager fm = currentProgram.getFunctionManager();
+                  for (Function func : fm.getFunctions(true)) {
+                      // McSema format: function_address function_name
+                      writer.write(String.format("0x%08X %s\n", func.getEntryPoint().getOffset(), func.getName()));
+                  }
+                  writer.close();
+              }
+          }
+          EOF
+          
+          ./ghidra/support/analyzeHeadless /home/runner/ghidra_project MyProject \
+            -import libs/libJadeEmpireCore.so \
+            -scriptPath /home/runner/ghidra_scripts \
+            -postScript ExportCFG.java \
+            -deleteProject \
+            -max-cpu 2 \
+            -jvmArgs "-Xmx6g"
+
+      - name: Lift to LLVM IR with McSema
+        run: |
+          # Run McSema in memory-limited mode
+          ulimit -v 6000000
+          
+          # McSema lifts the binary using the CFG bounds
+          mcsema-lift-14.0 \
+            --os linux \
+            --arch aarch64 \
+            --cfg /home/runner/mcsema_input.txt \
+            --binary libs/libJadeEmpireCore.so \
+            --output libJadeEmpireCore.bc
+
+      - name: Convert Bitcode to LLVM IR (.ll)
+        run: |
+          llvm-dis-14.0 libJadeEmpireCore.bc -o libJadeEmpireCore.ll
+
+      - name: Upload LLVM IR
+        uses: actions/upload-artifact@v4
+        with:
+          name: jade-empire-llvm-ir
+          path: libJadeEmpireCore.ll
+          retention-days: 7
