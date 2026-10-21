@@ -6,7 +6,7 @@ on:
 jobs:
   translate:
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 360 # Increased to 6 hours (GitHub max) since 8MB will take a long time
 
     steps:
       - name: Checkout Repository
@@ -20,7 +20,6 @@ jobs:
       - name: Download and Extract RetDec v4.0
         run: |
           wget https://github.com/avast/retdec/releases/download/v4.0/retdec-v4.0-ubuntu-64b.tar.xz
-          # Extract the archive. It will create a folder named 'retdec'
           tar -xf retdec-v4.0-ubuntu-64b.tar.xz
           echo "Extracted contents:"
           ls -l
@@ -28,7 +27,6 @@ jobs:
       - name: Locate the Decompiler Binary
         id: find_retdec
         run: |
-          # Dynamically find the path to the executable
           DECOMPILER_PATH=$(find . -type f -name 'retdec-decompiler.py' | head -n 1)
           if [ -z "$DECOMPILER_PATH" ]; then
             echo "Error: Could not find retdec-decompiler.py"
@@ -37,9 +35,14 @@ jobs:
           echo "Found decompiler at: $DECOMPILER_PATH"
           echo "decompiler_path=$DECOMPILER_PATH" >> "$GITHUB_OUTPUT"
 
-      - name: Decompile libObbVfs.so
+      - name: Decompile libJadeEmpireCore.so (Large File)
         run: |
-          python3 "${{ steps.find_retdec.outputs.decompiler_path }}" libs/libObbVfs.so
+          chmod +x "${{ steps.find_retdec.outputs.decompiler_path }}"
+          # Limit to 6GB RAM (6,000,000 KB) to prevent OOMKilled on GitHub's 7GB runner
+          ulimit -v 6000000
+          
+          # Run the decompiler
+          python3 "${{ steps.find_retdec.outputs.decompiler_path }}" libs/libJadeEmpireCore.so
 
       - name: Upload LLVM IR and C Outputs
         uses: actions/upload-artifact@v4
