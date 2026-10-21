@@ -1,0 +1,47 @@
+name: AOT Translate Jade Empire (RetDec)
+
+on:
+  workflow_dispatch: # Allows you to run this manually from the Actions tab
+  push:
+    branches: [ main, master ]
+
+jobs:
+  translate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180 # RetDec can take a long time on large binaries
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install RetDec Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y upx graphviz
+
+      - name: Download and Extract RetDec v4.0
+        run: |
+          wget https://github.com/avast/retdec/releases/download/v4.0/retdec-v4.0-ubuntu-64b.tar.xz
+          tar -xf retdec-v4.0-ubuntu-64b.tar.xz
+          mv retdec-v4.0-ubuntu-64b retdec
+          echo "RetDec installed successfully."
+
+      - name: Decompile libJadeEmpireCore.so
+        run: |
+          # Adjust the input path if your .so file is located elsewhere
+          ./retdec/bin/retdec-decompiler libs/libJadeEmpireCore.so
+          
+      - name: Decompile libObbVfs.so
+        run: |
+          ./retdec/bin/retdec-decompiler libs/libObbVfs.so
+
+      - name: Upload LLVM IR and C Outputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: jade-empire-aot-output
+          # RetDec outputs .ll (LLVM IR), .c (Pseudo-C), and .dsm (Assembly) files
+          path: |
+            libs/*.ll
+            libs/*.c
+            libs/*.dsm
+          retention-days: 7
