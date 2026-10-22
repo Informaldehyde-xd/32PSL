@@ -1,4 +1,4 @@
-name: AOT Translate Jade Empire (RetDec)
+name: AOT Translate All Libs (RetDec)
 
 on:
   workflow_dispatch:
@@ -6,7 +6,7 @@ on:
 jobs:
   translate:
     runs-on: ubuntu-latest
-    timeout-minutes: 360 # Increased to 6 hours (GitHub max) since 8MB will take a long time
+    timeout-minutes: 60 # Reduced timeout because these files are tiny
 
     steps:
       - name: Checkout Repository
@@ -35,19 +35,29 @@ jobs:
           echo "Found decompiler at: $DECOMPILER_PATH"
           echo "decompiler_path=$DECOMPILER_PATH" >> "$GITHUB_OUTPUT"
 
-      - name: Decompile libJadeEmpireCore.so (Large File)
+      - name: Decompile All .so Files in libs/
         run: |
           chmod +x "${{ steps.find_retdec.outputs.decompiler_path }}"
-          # Limit to 6GB RAM (6,000,000 KB) to prevent OOMKilled on GitHub's 7GB runner
-          ulimit -v 6000000
           
-          # Run the decompiler
-          python3 "${{ steps.find_retdec.outputs.decompiler_path }}" --no-memory-limit libs/libJadeEmpireCore.so
+          # Loop through every .so file in the libs folder
+          for file in libs/*.so; do
+            if [ -f "$file" ]; then
+              echo "=================================================="
+              echo "Decompiling: $file"
+              echo "=================================================="
+              
+              # Run RetDec on the file
+              python3 "${{ steps.find_retdec.outputs.decompiler_path }}" --no-memory-limit "$file"
+              
+              echo "Finished decompiling $file"
+            fi
+          done
 
       - name: Upload LLVM IR and C Outputs
         uses: actions/upload-artifact@v4
         with:
-          name: jade-empire-aot-output
+          name: all-libs-aot-output
+          # This grabs every generated .ll, .c, and .dsm file in the libs folder
           path: |
             libs/*.ll
             libs/*.c
